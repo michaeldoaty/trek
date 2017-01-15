@@ -1,4 +1,20 @@
-(ns trek.examples)
+(ns trek.examples
+  (:require [clojure.spec :as s]))
+
+(defn ranged-rand
+  "Returns random int in range start <= rand < end"
+  [start end]
+  (+ start (long (rand (- end start)))))
+
+
+(s/fdef ranged-rand
+        :args (s/and (s/cat :start int? :end int?)
+                     #(< (:start %) (:end %)))
+        :ret int?
+        :fn (s/and #(>= (:ret %) (-> % :args :start))
+                   #(< (:ret %) (-> % :args :end))))
+
+(s/form (:ret (s/get-spec `ranged-rand)))
 
 (def query {:user [:first-name
                    :last-name
@@ -7,13 +23,15 @@
 
 (declare all-users user-friends user-posts find-user authenticated context)
 
-
 ;;; user multimethod
 
 (defmulti user (fn [path _ _] path))
 
-(defmethod user :entity [_ _ context]
+(defmethod user :user [_ _ context]
   (find-user (:args context)))
+
+(defmethod user [:user :first-name] [_ _ _]
+  nil)
 
 (defmethod user [:user] [_ users context]
   (map #(select-keys % [:first-name :last-name])))
@@ -38,64 +56,29 @@
 
 
 ;; mutation map
-{:user/create-user   {:entity    :entity/user
-                      :spec-args [:user/username :user/favorite-color]
-                      :state     [:db]
-                      :resolver  create-user}
+;; function spec required to have args and ret
+{:user/create-user   {:state    [:db]
+                      :resolver create-user}
 
- :user/send-to-kafka {:entity    :entity/user
-                      :spec-args [:user/id]
-                      :state     [:kafka]
-                      :resolver  send-user-to-kafka}}
+ :user/send-to-kafka {:state    [:kafka]
+                      :resolver send-user-to-kafka}}
 
 
 ;;; mutation implementation
-[{:signup/click-enter {:mutation :user/create-user
-                       :args     {:user/username       "joe"
-                                  :user/favorite-color "blue"}
-                       :query    {:user [:user/username
-                                         :user/favorite-color]}}}]
+;;; on implementation, you must provide an id in the args if you use a query
+[{:user/create-user {:args  {:user/id             5
+                             :user/username       "joe"
+                             :user/favorite-color "blue"}
 
-
-
-
-[:user/create-user
- :user/send-to-kafka]
-
-[{:user/create-user #{:create}}
- {:user/send-to-kafka #{:create}}]
-
-;; use of mutation
-{:user/create-user {:mutations [:user/create-user
-                                :user/send-to-kafka]}}
-
-
-{[:user/create-user
-  :user/send-to-kafka]
- {:user [:first-name
-         :last-name]}}
-
-
-;[[:user/welcome-email]
-; [:user/welcome-text]]
-;
-;{[:user/welcome-email] welcome-email
-; [:user/welcome-text]  welcome-text}
-
-
-
-
-{:user [:user/welcome-email user]}
-{:user [:user/welcome-text user]}
-
-
+                     :query {:user [:user/username
+                                    :user/favorite-color]}}}]
 
 
 ;;; post multimethod
 
 (defmulti post (fn [path _ _] path))
 
-(defmethod post :entity [_ _ context]
+(defmethod post :post [_ _ context]
   nil)
 
 (defmethod post [:post] [path _ _]
@@ -119,22 +102,33 @@
 (defn uuid []
   (java.util.UUID/randomUUID))
 
+(declare first-name last-name)
+
+{[:user :first-name] first-name
+ [:user :last-name]  last-name}
+
+;;; Thinking about change this map's name because it needs
+;;; to represent things such as search and other things that
+;;; are not "entities".
+
+;;; Thinking about getting rid of links because they can be generated
+;;; via spec destructing
 
 (def entity-map {:user   {:trek/id       :id
                           :trek/spec     ::user
-                          :trek/links    {:posts :post
+                          :trek/links    {:posts   :post
                                           :friends :user}
                           :trek/state    [:db]
                           :trek/desc     "The user of the system"
                           :trek/resolver user}
 
-                 :post {:trek/id       :id
+                 :post   {:trek/id       :id
                           :trek/spec     ::post
                           :trek/state    [:db]
                           :trek/desc     "The post of the system"
                           :trek/resolver post}
 
-                 :root   {:trek/links    {:users   :user
+                 :root   {:trek/links    {:users :user
                                           :posts :post}
                           :trek/state    [:db]
                           :trek/resolver root}})
@@ -155,12 +149,27 @@
 ;(framework/execute-query users-query entity-map)
 ;(time (framework/execute-query query entity-map))
 
-{:user [{:friends [:first-name
-                   :last-name]}]}
-
 ;(def query {:user [:first-name
 ;                   :last-name
 ;                   {:friends [:first-name
 ;                              :last-name
 ;                              {:posts [:title
 ;                                         :objective]}]}]})
+
+(s/def ::number int?)
+(s/def ::mobile boolean?)
+
+(def email-regex #"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,63}$")
+(s/def ::email-type (s/and string? #(re-matches email-regex %)))
+
+(s/def ::acctid int?)
+(s/def ::first-name string?)
+(s/def ::last-name string?)
+(s/def ::email ::email-type)
+(s/def ::phone (s/keys :req [::number ::mobile]))
+
+(s/def ::person (s/keys :req [::first-name ::last-name ::phone]))
+
+(s/form ::person)
+(s/form ::phone)
+;(s/exercise ::person)
