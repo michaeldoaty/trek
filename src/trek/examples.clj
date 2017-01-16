@@ -21,7 +21,7 @@
                    {:friends [:first-name
                               :last-name]}]})
 
-(declare all-users user-friends user-posts find-user authenticated context)
+(declare all-users user-friends user-posts find-user authenticated context users)
 
 ;;; user multimethod
 
@@ -114,24 +114,36 @@
 ;;; Thinking about getting rid of links because they can be generated
 ;;; via spec destructing
 
-(def entity-map {:user   {:trek/id       :id
-                          :trek/spec     ::user
-                          :trek/links    {:posts   :post
-                                          :friends :user}
-                          :trek/state    [:db]
-                          :trek/desc     "The user of the system"
-                          :trek/resolver user}
+;;; query implementation
 
-                 :post   {:trek/id       :id
-                          :trek/spec     ::post
-                          :trek/state    [:db]
-                          :trek/desc     "The post of the system"
-                          :trek/resolver post}
+;;; change resolver name because it needs to be different from the
+;;; resolver on entity
 
-                 :root   {:trek/links    {:users :user
-                                          :posts :post}
-                          :trek/state    [:db]
-                          :trek/resolver root}})
+;;; restrict the query function to a coll of a spec or keys
+;;; with a value of a valid entity for now
+
+{:users {:trek/state [:db]
+         :trek/fn    users}}
+
+{:users [{:user [::first-name
+                 ::last-name]}]}
+
+(def entity-map {:user {:trek/id       :id
+                        :trek/spec     ::user
+                        :trek/state    [:db]
+                        :trek/desc     "The user of the system"
+                        :trek/resolver user}
+
+                 :post {:trek/id       :id
+                        :trek/spec     ::post
+                        :trek/state    [:db]
+                        :trek/desc     "The post of the system"
+                        :trek/resolver post}
+
+                 :root {:trek/links    {:users :user
+                                        :posts :post}
+                        :trek/state    [:db]
+                        :trek/resolver root}})
 
 
 
