@@ -1,7 +1,6 @@
 (ns trek.parser
   (:require [clojure.spec :as s]))
 
-
 (defn parse-query
   "Parses a query into a vector of vectors consisting of a dispatch
   value and the attributes for that dispatch."
