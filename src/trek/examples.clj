@@ -115,3 +115,11 @@
                           {:author [:first-name
                                     :last-name]}]}]})
 
+
+
+;;; parsed query
+{[:me]                [:first-name :last-name :friends :posts]
+ [:me :friends]       [:first-name :last-name]
+ [:me :posts]         [:title :created-at :author]
+ [:me :posts :author] [:first-name :last-name]}
+
