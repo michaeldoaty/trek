@@ -105,6 +105,9 @@
                         :trek/desc     "The post of the system"
                         :trek/resolver post}})
 
+(defn create-result-entry [result path]
+  (assoc-in result [path] []))
+
 ;;; query
 (def query {:me [:first-name
                  :last-name
@@ -114,4 +117,61 @@
                           :created-at
                           {:author [:first-name
                                     :last-name]}]}]})
+
+
+(defn parser [query]
+  (let [root-key   (apply key query)
+        root-value (apply val query)]
+
+    (loop [current-path   [root-key]
+           current-value  root-value
+           unparsed-query []
+           result         {current-path []}]
+
+      (cond
+        (keyword? (first current-value))
+        (recur
+          current-path
+          (vec (rest current-value))
+          unparsed-query
+          (update-in result [current-path] conj (first current-value)))
+
+        (map? (first current-value))
+        (let [new-key   (apply key (first current-value))
+              new-value (apply val (first current-value))
+              new-path  (conj current-path new-key)]
+          (recur
+            current-path
+            (vec (rest current-value))
+            (conj unparsed-query [new-path new-value])
+            (-> result
+                (assoc-in [new-path] [])
+                (update-in [current-path] conj new-key))))
+
+        (and (not (empty? unparsed-query))
+             (empty? current-value))
+        (let [[new-path new-value] (first unparsed-query)]
+          (recur
+            new-path
+            new-value
+            (vec (rest unparsed-query))
+            result))
+
+        :else
+        result))))
+
+
+(def parsed-query
+  {[:me]                [:first-name :last-name :friends :posts]
+   [:me :friends]       [:first-name :last-name]
+   [:me :posts]         [:title :created-at :author]
+   [:me :posts :author] [:first-name :last-name]})
+
+
+
+
+
+
+
+
 
