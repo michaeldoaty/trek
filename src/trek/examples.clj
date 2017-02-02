@@ -1,5 +1,6 @@
 (ns trek.examples
   (:require [clojure.spec :as s]
+            [clojure.core.async :as async]
             [trek.parser :as parser]))
 
 (defn ranged-rand
@@ -105,6 +106,10 @@
                         :trek/desc     "The post of the system"
                         :trek/resolver post}})
 
+(def links-map {:user  :user
+                :posts :post
+                :post  :post})
+
 (defn create-result-entry [result path]
   (assoc-in result [path] []))
 
@@ -119,8 +124,23 @@
                                     :last-name]}]}]})
 
 
-(defn parser [query]
-  (let [root-key   (apply key query)
+(defn normalize-dispatch
+  "Normalizes the path to return an entity type plus an attribute.
+  For example, [:user :friends :applications] turns into [:user :applications]
+  if :friends is a type of :user"
+
+  [path links-map]
+  (letfn [(get-entity [v k]
+            (let [entity (get links-map (conj v k))]
+              [entity]))]
+
+    (conj
+      (reduce get-entity [] (drop-last path))
+      (last path))))
+
+
+(defn parser [query entity]
+  (let [root-key   (or entity (apply key query))
         root-value (apply val query)]
 
     (loop [current-path   [root-key]
@@ -162,10 +182,92 @@
 
 
 (def parsed-query
-  {[:me]                [:first-name :last-name :friends :posts]
-   [:me :friends]       [:first-name :last-name]
-   [:me :posts]         [:title :created-at :author]
-   [:me :posts :author] [:first-name :last-name]})
+  {[:user]                [:first-name :last-name :friends :posts]
+   [:user :friends]       [:first-name :last-name]
+   [:user :posts]         [:title :created-at :author]
+   [:user :posts :author] [:first-name :last-name]})
 
+;{:attr :first-name
+; :path [:user]
+; :resolver-data {}}
+(defn resolver-data [data]
+  nil)
+
+;;; take root path key
+;;; pass path key and attr value to pipeline channel
+;;; once value comes back from the pipeline check for link -- alt -- check if a link, if so add to path to todo-list
+;;; -- done when channel is closed
+
+;(let [to-chan       (async/chan)
+;      from-chan     (async/chan)
+;      parsed-data   parsed-query
+;      resolved-data {}
+;      path          [:user]]
+;
+;  (async/pipeline-blocking 5 to-chan (map resolver-data) from-chan)
+;
+;  (doseq [attr (get parsed-query path)]
+;    (async/put! from-chan {:attr          attr
+;                           :path          path
+;                           :resolved-data resolved-data}))
+;
+;  (async/go-loop [v (async/<! from-chan)
+;                  result {}]
+;    (if-not v
+;      result
+;      (recur
+;        (async/<! from-chan)
+;        result))))
+
+
+;(defn get-attrs [data context]
+;  (let [parsed-query (:parsed-query context)
+;        entity-map   (:entity-map context)
+;        entity       (:entity context)
+;        links-map    (:links-map context)]
+;
+;    (loop [attrs    (get parsed-query [entity])
+;           data     data
+;           result   {}
+;           resolver (-> entity-map entity :trek/resolver)]
+;
+;      (cond
+;        (empty? attrs)
+;        result
+;
+;        (let [dispatch-key (first attrs)
+;              new-data     (resolver dispatch-key data context)
+;              link         (get-in links-map [entity (first attrs)])]
+;          ;; resolve
+;          ;; check if coll, if so map
+;          ;; check if a link, if so get children
+;          nil)
+;
+;        :else
+;        nil))))
+;
+;(defn execute [mutation-key mutations context]
+;  (let [f      (:trek/fn (get mutations mutation-key))
+;        result (f (:args context))]
+;    (if (coll? result)
+;      (map #(get-attrs % context))
+;      (get-attrs result context))))
+
+;(parser query :user)
+
+(s/def ::first-name string?)
+(s/def ::last-name string?)
+(s/def ::user (s/keys :req [::first-name ::last-name]))
+
+(parser/entity-attrs (s/form ::user))
+
+
+(defn link-map
+  "Creates :trek/link-map from the entity map"
+  [entity-map]
+  (letfn [(links [entity-map* [entity-key entity-config]]
+            (update-in entity-map* [:trek/link-map]
+                       merge (:trek/links entity-config) {entity-key entity-key}))]
+    (reduce links entity-map entity-map)))
 
 
