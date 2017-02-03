@@ -92,6 +92,13 @@
 {:me [:first-name
       :last-name]}
 
+(s/def ::title string?)
+(s/def ::author string?)
+(s/def ::post (s/keys :req [::title ::author]))
+
+(s/def ::first-name string?)
+(s/def ::last-name string?)
+(s/def ::user (s/keys :req [::first-name ::last-name]))
 
 (def entity-map {:user {:trek/id       :id
                         :trek/spec     ::user
@@ -255,19 +262,18 @@
 
 ;(parser query :user)
 
-(s/def ::first-name string?)
-(s/def ::last-name string?)
-(s/def ::user (s/keys :req [::first-name ::last-name]))
 
-(parser/entity-attrs (s/form ::user))
+(defn- links
+  "Reduce function for entity map.  Merges trek/links to a trek/link-map key on entity map."
+  [entity-map [entity-key entity-config]]
+  (update-in entity-map [:trek/link-map] merge (:trek/links entity-config) {entity-key entity-key}))
 
-
-(defn link-map
-  "Creates :trek/link-map from the entity map"
+(defn expand-entity-map
+  "Expands entity-map by adding link map and expanding spec keys"
   [entity-map]
-  (letfn [(links [entity-map* [entity-key entity-config]]
-            (update-in entity-map* [:trek/link-map]
-                       merge (:trek/links entity-config) {entity-key entity-key}))]
-    (reduce links entity-map entity-map)))
-
+  (letfn [(expand-entity-map [m [k v :as k-v]]
+            (-> m
+                (links k-v)
+                (assoc-in [k :trek/attrs] (parser/entity-attrs (s/form (:trek/spec v))))))]
+    (reduce expand-entity-map entity-map entity-map)))
 
