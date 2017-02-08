@@ -1,6 +1,7 @@
 (ns trek.examples
   (:require [clojure.spec :as s]
             [clojure.core.async :as async]
+            [clojure.pprint :as pp]
             [trek.parser :as parser]))
 
 (defn ranged-rand
@@ -17,10 +18,10 @@
 
 (s/form (:ret (s/get-spec `ranged-rand)))
 
-(def query {:user [:first-name
-                   :last-name
-                   {:posts [:author
-                            :created_at]}]})
+(def query {:entity/user [:user/first-name
+                          :user/last-name
+                          {:user/posts [:post/author
+                                        :post/created_at]}]})
 
 (declare all-users user-posts find-user authenticated context users get-user-posts me)
 
@@ -28,13 +29,13 @@
 
 (defmulti user (fn [path _ _] path))
 
-(defmethod user :first-name [_ user context]
+(defmethod user :user/first-name [_ user context]
   (:first-name user))
 
-(defmethod user :last-name [_ user context]
+(defmethod user :user/last-name [_ user context]
   (:last-name user))
 
-(defmethod user :posts [_ user context]
+(defmethod user :user/posts [_ user context]
   (get-user-posts user (-> context :state :db)))
 
 
@@ -42,11 +43,11 @@
 
 ;; mutation map
 ;; function spec required to have args and ret
-{:user/create-user   {:trek/state [:db]
-                      :trek/fn    create-user}
+{:mutation/create-user   {:trek/state [:db]
+                          :trek/fn    create-user}
 
- :user/send-to-kafka {:trek/state [:kafka]
-                      :trek/fn    send-user-to-kafka}}
+ :mutation/send-to-kafka {:trek/state [:kafka]
+                          :trek/fn    send-user-to-kafka}}
 
 
 ;;; mutation implementation
@@ -55,8 +56,8 @@
                              :user/username       "joe"
                              :user/favorite-color "blue"}
 
-                     :query {:user [:user/username
-                                    :user/favorite-color]}}}]
+                     :query {:entity/user [:user/username
+                                           :user/favorite-color]}}}]
 
 
 ;;; post multimethod
@@ -75,7 +76,7 @@
 ;;; queries
 ;;; mutations
 
-{:users {:trek/state [:db]
+{:users {:trek/state [:state/db]
          :trek/fn    users}}
 
 {:users [{:user [::first-name
@@ -85,12 +86,12 @@
           :first-name ""
           :last-name  ""}]}
 
-{:me {:trek/state [:db]
-      :trek/desc  "Get the current user"
-      :trek/fn    me}}
+{:query/me {:trek/state [:state/db]
+            :trek/desc  "Get the current user"
+            :trek/fn    me}}
 
-{:me [:first-name
-      :last-name]}
+{:query/me [:first-name
+            :last-name]}
 
 (s/def ::title string?)
 (s/def ::author string?)
@@ -100,35 +101,35 @@
 (s/def ::last-name string?)
 (s/def ::user (s/keys :req [::first-name ::last-name]))
 
-(def entity-map {:user {:trek/id       :id
-                        :trek/spec     ::user
-                        :trek/links    {:posts :post}
-                        :trek/state    [:db]
-                        :trek/desc     "The user of the system"
-                        :trek/resolver user}
+(def entity-map {:entity/user {:trek/id       :user/id
+                               :trek/spec     ::user
+                               :trek/links    {:user/posts :entity/post}
+                               :trek/state    [:db]
+                               :trek/desc     "The user of the system"
+                               :trek/resolver user}
 
-                 :post {:trek/id       :id
-                        :trek/spec     ::post
-                        :trek/state    [:db]
-                        :trek/desc     "The post of the system"
-                        :trek/resolver post}})
+                 :entity/post {:trek/id       :post/id
+                               :trek/spec     ::post
+                               :trek/state    [:db]
+                               :trek/desc     "The post of the system"
+                               :trek/resolver post}})
 
-(def links-map {:user  :user
-                :posts :post
-                :post  :post})
+(def links-map {:entity/user :entity/user
+                :user/posts  :entity/post
+                :entity/post :entity/post})
 
 (defn create-result-entry [result path]
   (assoc-in result [path] []))
 
 ;;; query
-(def query {:me [:first-name
-                 :last-name
-                 {:friends [:first-name
-                            :last-name]}
-                 {:posts [:title
-                          :created-at
-                          {:author [:first-name
-                                    :last-name]}]}]})
+(def query {:query/me [:user/first-name
+                       :user/last-name
+                       {:user/friends [:user/first-name
+                                       :user/last-name]}
+                       {:user/posts [:post/title
+                                     :post/created-at
+                                     {:post/author [:user/first-name
+                                                    :user/last-name]}]}]})
 
 
 (defn normalize-dispatch
@@ -189,10 +190,10 @@
 
 
 (def parsed-query
-  {[:user]                [:first-name :last-name :friends :posts]
-   [:user :friends]       [:first-name :last-name]
-   [:user :posts]         [:title :created-at :author]
-   [:user :posts :author] [:first-name :last-name]})
+  {[:entity/user]                          [:user/first-name :user/last-name :user/friends :user/posts]
+   [:entity/user :user/friends]            [:user/first-name :user/last-name]
+   [:entity/user :user/posts]              [:post/title :post/created-at :post/author]
+   [:entity/user :user/posts :post/author] [:user/first-name :user/last-name]})
 
 ;{:attr :first-name
 ; :path [:user]
@@ -268,6 +269,11 @@
   [entity-map [entity-key entity-config]]
   (update-in entity-map [:trek/link-map] merge (:trek/links entity-config) {entity-key entity-key}))
 
+(defn- resolver-map
+  ""
+  []
+  nil)
+
 (defn expand-entity-map
   "Expands entity-map by adding link map and expanding spec keys"
   [entity-map]
@@ -277,3 +283,12 @@
                 (assoc-in [k :trek/attrs] (parser/entity-attrs (s/form (:trek/spec v))))))]
     (reduce expand-entity-map entity-map entity-map)))
 
+;(pp/pprint (expand-entity-map entity-map))
+
+;(get-method user :first-name)
+
+;;; create resolver map
+;;; create query-execution
+;;; spec entity map
+;;; spec queries
+;;; spec mutations
