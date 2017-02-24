@@ -1,7 +1,9 @@
 (ns trek.examples
   (:require [clojure.spec :as s]
             [clojure.core.async :as async]
-            [trek.parser :as parser]))
+            [clojure.pprint :as pp]
+            [trek.parser :as parser])
+  (:import (clojure.lang MultiFn)))
 
 (defn ranged-rand
   "Returns random int in range start <= rand < end"
@@ -92,26 +94,52 @@
 {:me [:first-name
       :last-name]}
 
+(defn spec? [spec]
+  (try
+    (not= (s/form spec) :clojure.spec/unknown)
+    (catch Exception _ false)))
+
 (s/def ::title string?)
 (s/def ::author string?)
 (s/def ::post (s/keys :req [::title ::author]))
 
-(s/def ::first-name string?)
-(s/def ::last-name string?)
-(s/def ::user (s/keys :req [::first-name ::last-name]))
+(s/def :user/first-name string?)
+(s/def :user/last-name string?)
+(s/def :user/posts (s/coll-of string?))
+(s/def :user/id number?)
+(s/def ::user (s/keys :req [:user/first-name :user/last-name]))
 
-(def entity-map {:user {:trek/id       :id
-                        :trek/spec     ::user
-                        :trek/links    {:posts :post}
-                        :trek/state    [:db]
-                        :trek/desc     "The user of the system"
-                        :trek/resolver user}
+(s/def :post/id number?)
 
-                 :post {:trek/id       :id
-                        :trek/spec     ::post
-                        :trek/state    [:db]
-                        :trek/desc     "The post of the system"
-                        :trek/resolver post}})
+(s/def :state/db string?)
+
+(s/def :trek/keyword-spec (s/and qualified-keyword? spec?))
+(s/def :trek/id :trek/keyword-spec)
+(s/def :trek/spec :trek/keyword-spec)
+(s/def :trek/links (s/map-of :trek/keyword-spec keyword?))
+(s/def :trek/state (s/coll-of :trek/keyword-spec))
+(s/def :trek/desc string?)
+(s/def :trek/resolver #(instance? MultiFn %))
+(s/def :trek/attrs (s/coll-of :trek/keyword-spec))
+
+
+(s/def :trek/entity-config (s/keys :req [:trek/id :trek/spec :trek/state :trek/resolver]
+                                   :opt [:trek/desc :trek/attrs :trek/linkskk]))
+
+(s/def :trek/entity-map (s/map-of keyword? :trek/entity-config))
+
+(def entity-map {:entity/user {:trek/id       :user/id
+                               :trek/spec     ::user
+                               :trek/links    {:user/posts :entity/post}
+                               :trek/state    [:state/db]
+                               :trek/desc     "The user of the system"
+                               :trek/resolver user}
+
+                 :entity/post {:trek/id       :post/id
+                               :trek/spec     ::post
+                               :trek/state    [:state/db]
+                               :trek/desc     "The post of the system"
+                               :trek/resolver post}})
 
 (def links-map {:user  :user
                 :posts :post
@@ -263,10 +291,21 @@
 ;(parser query :user)
 
 
+(s/fdef links
+        :args (s/cat :entity-map :trek/entity-map
+                     :entity-pair (s/cat :entity-key keyword?
+                                         :entity-config :trek/entity-config))
+        :ret nil)
+
 (defn- links
-  "Reduce function for entity map.  Merges trek/links to a trek/link-map key on entity map."
+  "Reduce function for entity map expansion.  Merges trek/links to a trek/link-map key on entity map."
   [entity-map [entity-key entity-config]]
   (update-in entity-map [:trek/link-map] merge (:trek/links entity-config) {entity-key entity-key}))
+
+
+(s/fdef expand-entity-map
+        :args (s/cat :entity-map :trek/entity-map)
+        :ret (s/keys :req [:trek/entity-map :trek/link-map]))
 
 (defn expand-entity-map
   "Expands entity-map by adding link map and expanding spec keys"
@@ -277,3 +316,6 @@
                 (assoc-in [k :trek/attrs] (parser/entity-attrs (s/form (:trek/spec v))))))]
     (reduce expand-entity-map entity-map entity-map)))
 
+;(pp/pprint (expand-entity-map entity-map))
+
+(s/conform :trek/entity-map entity-map)
