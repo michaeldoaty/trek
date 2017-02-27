@@ -2,6 +2,8 @@
   (:require [clojure.spec :as s]
             [clojure.core.async :as async]
             [clojure.pprint :as pp]
+            [clojure.test.check.generators :as gen]
+            [clojure.string :as str]
             [trek.parser :as parser])
   (:import (clojure.lang MultiFn)))
 
@@ -19,10 +21,6 @@
 
 (s/form (:ret (s/get-spec `ranged-rand)))
 
-(def query {:entity/user [:user/first-name
-                          :user/last-name
-                          {:user/posts [:post/author
-                                        :post/created_at]}]})
 
 (declare all-users user-posts find-user authenticated context users get-user-posts me)
 
@@ -96,47 +94,68 @@
 
 (defn spec? [spec]
   (try
-    (not= (s/form spec) :clojure.spec/unknown)
+    (not (nil? (s/get-spec spec)))
     (catch Exception _ false)))
 
-(s/def ::title string?)
-(s/def ::author string?)
-(s/def ::post (s/keys :req [::title ::author]))
+(defn multimethod? [func]
+  (try
+    (instance? MultiFn func)
+    (catch Exception _ false)))
+
+
+(s/def :post/title string?)
+(s/def :post/author string?)
+(s/def :post/post (s/keys :req [::title ::author]))
 
 (s/def :user/first-name string?)
 (s/def :user/last-name string?)
 (s/def :user/posts (s/coll-of string?))
 (s/def :user/id number?)
-(s/def ::user (s/keys :req [:user/first-name :user/last-name]))
+(s/def :user/user (s/keys :req [:user/first-name :user/last-name]))
 
 (s/def :post/id number?)
-
 (s/def :state/db string?)
 
-(s/def :trek/keyword-spec (s/and qualified-keyword? spec?))
+;;; keyword spec mocks
+(s/def :trek/mock-spec string?)
+
+;;; resolve mock
+(defmulti trek-mock-multi :mock/type)
+(defmethod trek-mock-multi :test [data] :test)
+(defmethod trek-mock-multi :dev [data] :data)
+
+
+(defn keyword-specs [spec-registry]
+  (set (filter keyword? (keys spec-registry))))
+
+(s/def :trek/keyword-spec (s/with-gen spec? #(s/gen (keyword-specs (s/registry)))))
+
+;;; entity config spec
 (s/def :trek/id :trek/keyword-spec)
 (s/def :trek/spec :trek/keyword-spec)
 (s/def :trek/links (s/map-of :trek/keyword-spec keyword?))
 (s/def :trek/state (s/coll-of :trek/keyword-spec))
 (s/def :trek/desc string?)
-(s/def :trek/resolver #(instance? MultiFn %))
+(s/def :trek/resolver (s/with-gen multimethod? #(s/gen #{trek-mock-multi})))
 (s/def :trek/attrs (s/coll-of :trek/keyword-spec))
 
 
 (s/def :trek/entity-config (s/keys :req [:trek/id :trek/spec :trek/state :trek/resolver]
-                                   :opt [:trek/desc :trek/attrs :trek/linkskk]))
+                                   :opt [:trek/desc :trek/attrs :trek/links]))
 
 (s/def :trek/entity-map (s/map-of keyword? :trek/entity-config))
+(s/def :trek/link-map (s/map-of qualified-keyword? qualified-keyword?))
+
 
 (def entity-map {:entity/user {:trek/id       :user/id
-                               :trek/spec     ::user
+                               :trek/spec     :user/user
                                :trek/links    {:user/posts :entity/post}
                                :trek/state    [:state/db]
                                :trek/desc     "The user of the system"
                                :trek/resolver user}
 
                  :entity/post {:trek/id       :post/id
-                               :trek/spec     ::post
+                               :trek/spec     :post/post
                                :trek/state    [:state/db]
                                :trek/desc     "The post of the system"
                                :trek/resolver post}})
@@ -316,6 +335,5 @@
                 (assoc-in [k :trek/attrs] (parser/entity-attrs (s/form (:trek/spec v))))))]
     (reduce expand-entity-map entity-map entity-map)))
 
-;(pp/pprint (expand-entity-map entity-map))
 
 (s/conform :trek/entity-map entity-map)
