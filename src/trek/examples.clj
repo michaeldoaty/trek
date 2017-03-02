@@ -244,8 +244,61 @@
 ;{:attr :first-name
 ; :path [:user]
 ; :resolver-data {}}
-(defn resolver-data [data]
-  nil)
+(defn resolve-data [data]
+  (assoc data :result [:attr (:attr data)]))
+
+(defn resolve-root [root-path args]
+  {})
+
+;;; - issues -
+;;; resolving collection data
+;;;   if user/friends comes back as a collection, how should I handle it?
+
+(defn execute-query [parsed-query parsed-query-count root-map]
+  (let [{:keys [root-path root-args]} root-map
+        root-attrs (get parsed-query root-path)
+        root-data  (resolve-root root-path root-args)
+        done-chan  (async/chan parsed-query-count)]
+
+    (doseq [attr root-attrs]
+      (async/go (async/>! done-chan (resolve-data {:attr attr :path root-path :data root-data}))))
+
+    (loop [resolved-data      {}
+           parsed-query-count parsed-query-count]
+
+      (cond
+        (= parsed-query-count 0)
+        resolved-data
+
+        :else
+        (let [{:keys [attr path result]} (async/<!! done-chan)
+              new-path        (conj path attr)
+              remaining-attrs (get parsed-query new-path :trek/not-found)]
+
+          (if (= remaining-attrs :trek/not-found)
+            (recur
+              (assoc-in resolved-data new-path result)
+              (dec parsed-query-count))
+
+            (do
+              (doseq [attr remaining-attrs]
+                (async/go (async/>! done-chan (resolve-data {:attr attr :path new-path :data result}))))
+
+              (recur
+                resolved-data
+                (dec parsed-query-count)))))))))
+
+;(.indexOf [:a :b :c] :c)
+;(assoc-in {:a [{:a 1} {}]} [:a 0 :b] 2)
+;(vec (repeat 5 {}))
+;[:a :b :c]
+;(pp/pprint (execute-query parsed-query 11 {:root-path [:entity/user] :root-args nil}))
+
+
+;(doseq [attr attrs]
+;  (async/go (resolver-data {:attr attr
+;                            :path nil
+;                            :resolved-data}))))
 
 ;;; take root path key
 ;;; pass path key and attr value to pipeline channel
