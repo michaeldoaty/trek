@@ -288,6 +288,74 @@
                 resolved-data
                 (dec parsed-query-count)))))))))
 
+
+(defn resolve-collection-data [attr parent-data]
+  (let [result-chan   (async/chan)
+        resolve-count (count (:result parent-data))
+        result-data   (vec (repeat resolve-count {}))]
+
+    (doseq [[idx item] (map-indexed (:result parent-data))]
+      (async/go (async/>! result-chan (resolve-data {:attr attr :path [idx attr] :data item}))))
+
+    (async/go-loop []
+      (let [{:keys [path result]} (async/<! result-chan)
+            new-count (dec resolve-count)]
+
+        (assoc-in result-data path result)
+
+        (if (= new-count 0)
+          (assoc parent-data :data result-data)
+          (recur))))))
+
+
+
+(defn execute-query* [parsed-query parsed-query-count root-map]
+  (let [{:keys [root-path root-args]} root-map
+        root-attrs (get parsed-query root-path)
+        root-data  (resolve-root root-path root-args)
+        done-chan  (async/chan parsed-query-count)]
+
+    (doseq [attr root-attrs]
+      (async/go (async/>! done-chan (resolve-data {:attr attr :path root-path :data root-data}))))
+
+    (loop [resolved-data      {}
+           parsed-query-count parsed-query-count]
+
+      (cond
+        (= parsed-query-count 0)
+        resolved-data
+
+        :else
+        (let [{:keys [attr path result] :as done-result} (async/<!! done-chan)
+              new-path        (conj path attr)
+              remaining-attrs (get parsed-query new-path :trek/not-found)]
+
+          (cond
+
+            (= remaining-attrs :trek/not-found)
+            (recur
+              (assoc-in resolved-data new-path result)
+              (dec parsed-query-count))
+
+            (coll? result)
+            (do
+              (doseq [attr remaining-attrs]
+                (async/go (async/>! done-chan (resolve-collection-data attr done-result))))
+              (recur
+                resolved-data
+                parsed-query-count))
+
+            :else
+            (do
+              (doseq [attr remaining-attrs]
+                (async/go (async/>! done-chan (resolve-data {:attr attr :path new-path :data result}))))
+
+              (recur
+                resolved-data
+                (dec parsed-query-count)))))))))
+
+
+
 ;(.indexOf [:a :b :c] :c)
 ;(assoc-in {:a [{:a 1} {}]} [:a 0 :b] 2)
 ;(vec (repeat 5 {}))
