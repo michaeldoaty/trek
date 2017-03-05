@@ -4,7 +4,8 @@
             [clojure.pprint :as pp]
             [clojure.test.check.generators :as gen]
             [clojure.string :as str]
-            [trek.parser :as parser])
+            [trek.parser :as parser]
+            [trek.examples.resolvers :as resolvers])
   (:import (clojure.lang MultiFn)))
 
 (defn ranged-rand
@@ -21,21 +22,15 @@
 
 (s/form (:ret (s/get-spec `ranged-rand)))
 
+(declare all-users user-posts find-user authenticated context users get-user-posts)
 
-(declare all-users user-posts find-user authenticated context users get-user-posts me)
-
-;;; user multimethod
-
-(defmulti user (fn [path _ _] path))
-
-(defmethod user :user/first-name [_ user context]
-  (:first-name user))
-
-(defmethod user :user/last-name [_ user context]
-  (:last-name user))
-
-(defmethod user :user/posts [_ user context]
-  (get-user-posts user (-> context :state :db)))
+(defn me [args context]
+  {:first-name "Michael"
+   :last-name  "Jordan"
+   :friends    [{:first-name "Gary" :last-name "Payton"}
+                {:first-name "Scottie" :last-name "Pippen"}]
+   :posts      [{:title "ha ha" :created-at "yesterday" :author "george"}
+                {:title "blues" :created-at "today" :author "kim"}]})
 
 
 (declare create-user send-user-to-kafka)
@@ -57,17 +52,6 @@
 
                      :query {:entity/user [:user/username
                                            :user/favorite-color]}}}]
-
-
-;;; post multimethod
-
-(defmulti post (fn [path _ _] path))
-
-(defmethod post :author [path _ _]
-  (:author post))
-
-(defmethod post :created-at [path _ _]
-  (:created-at post))
 
 
 ;;; There are three ...
@@ -143,8 +127,15 @@
 (s/def :trek/entity-config (s/keys :req [:trek/id :trek/spec :trek/state :trek/resolver]
                                    :opt [:trek/desc :trek/attrs :trek/links]))
 
+;;; TODO:MD fill out later
+(s/def :trek/queries map?)
+
+;;; TODO:MD fill out later
+(s/def :trek/mutations map?)
+
 (s/def :trek/entity-map (s/map-of keyword? :trek/entity-config))
 (s/def :trek/link-map (s/map-of qualified-keyword? qualified-keyword?))
+(s/def :trek/execution-map (s/keys :req [:trek/entity-map :trek/link-map :trek/queries :trek/mutations]))
 
 
 (def entity-map {:entity/user {:trek/id       :user/id
@@ -152,17 +143,31 @@
                                :trek/links    {:user/posts :entity/post}
                                :trek/state    [:state/db]
                                :trek/desc     "The user of the system"
-                               :trek/resolver user}
+                               :trek/resolver resolvers/user}
 
                  :entity/post {:trek/id       :post/id
                                :trek/spec     :post/post
+                               :trek/links    {:post/author :entity/user}
                                :trek/state    [:state/db]
                                :trek/desc     "The post of the system"
-                               :trek/resolver post}})
+                               :trek/resolver resolvers/post}})
 
-(def links-map {:entity/user :entity/user
-                :user/posts  :entity/post
-                :entity/post :entity/post})
+(def link-map {:entity/user  :entity/user
+               :entity/post  :entity/post
+               :user/posts   :entity/post
+               :user/friends :entity/user})
+
+(def queries {:query/me {:trek/fn     me
+                         :trek/state  [:state/db]
+                         :trek/entity :entity/user
+                         :trek/desc   "Query to get user"}})
+
+(def mutations {})
+
+(def execution-map {:trek/entity-map entity-map
+                    :trek/link-map   link-map
+                    :trek/queries    queries
+                    :trek/mutations  mutations})
 
 (defn create-result-entry [result path]
   (assoc-in result [path] []))
@@ -237,31 +242,78 @@
 
 (def parsed-query
   {[:entity/user]                          [:user/first-name :user/last-name :user/friends :user/posts]
-   [:entity/user :user/friends]            [:user/first-name :user/last-name]
+   [:entity/user :user/friends]            [:user/first-name :user/last-name :user/friends]
    [:entity/user :user/posts]              [:post/title :post/created-at :post/author]
    [:entity/user :user/posts :post/author] [:user/first-name :user/last-name]})
 
+
 ;{:attr :first-name
 ; :path [:user]
-; :resolver-data {}}
-(defn resolve-data [data]
-  (assoc data :result [:attr (:attr data)]))
+; :data {}}
+(defn resolve-data [data execution-map]
+  (let [link     (last (:path data))
+        entity   (get (:trek/link-map execution-map) link)
+        resolver (get-in execution-map [:trek/entity-map entity :trek/resolver])
+        result   (resolver (:attr data) (:data data) (:context execution-map))]
+    (assoc data :result result)))
 
-(defn resolve-root [root-path args]
-  {})
+;(resolve-data {:attr :user/first-name
+;               :path [:entity/user]
+;               :data (me nil nil)}
+;              execution-map)
 
-;;; - issues -
-;;; resolving collection data
-;;;   if user/friends comes back as a collection, how should I handle it?
 
-(defn execute-query [parsed-query parsed-query-count root-map]
-  (let [{:keys [root-path root-args]} root-map
+;{:root-name [:query/me]
+; :root-args nil}
+(defn resolve-root [root-map execution-map]
+  (let [query   (:root-name root-map)
+        root-fn (get-in execution-map (flatten [:trek/queries query :trek/fn]))]
+    (root-fn (:root-args root-map) (:context execution-map))))
+
+;(resolve-collection-data {:result [{:user/first-name "Mike" :user/last-name "Johnson"}]
+;                          :attr   :user/first-name
+;                          :path   [:entity/user :user/friends]}
+;                         execution-map)
+
+(defn resolve-collection-data [data execution-map]
+  (let [result-chan  (async/chan)
+        result-count (count (:result data))
+        stub-data    (vec (repeat result-count {}))]
+
+    (doseq [[idx item] (map-indexed vector (:result data))]
+      (async/go (async/>! result-chan (resolve-data {:attr     (:attr data)
+                                                     :path     (:path data)
+                                                     :idx-path [idx (:attr data)]
+                                                     :data     item}
+                                                    execution-map))))
+
+    (loop [result-count result-count
+           result-data  stub-data]
+
+      (if (= result-count 0)
+        (assoc data :result result-data
+                    :done-coll? true
+                    :attr nil)
+
+        (let [{:keys [idx-path result]} (async/<!! result-chan)]
+          (recur (dec result-count)
+                 (assoc-in result-data idx-path result)))))))
+
+
+;(execute-query {:attr :user/first-name
+;               :path [:entity/user]
+;               :data (me nil nil)}
+;              execution-map)
+
+(defn execute-query* [parsed-query parsed-query-count root-map execution-map]
+  (let [{:keys [root-name root-args]} root-map
+        root-path  [(get-in execution-map [:trek/queries root-name :trek/entity])]
         root-attrs (get parsed-query root-path)
-        root-data  (resolve-root root-path root-args)
+        root-data  (resolve-root root-map execution-map)
         done-chan  (async/chan parsed-query-count)]
 
     (doseq [attr root-attrs]
-      (async/go (async/>! done-chan (resolve-data {:attr attr :path root-path :data root-data}))))
+      (async/go (async/>! done-chan (resolve-data {:attr attr :path root-path :data root-data} execution-map))))
 
     (loop [resolved-data      {}
            parsed-query-count parsed-query-count]
@@ -271,63 +323,8 @@
         resolved-data
 
         :else
-        (let [{:keys [attr path result]} (async/<!! done-chan)
-              new-path        (conj path attr)
-              remaining-attrs (get parsed-query new-path :trek/not-found)]
-
-          (if (= remaining-attrs :trek/not-found)
-            (recur
-              (assoc-in resolved-data new-path result)
-              (dec parsed-query-count))
-
-            (do
-              (doseq [attr remaining-attrs]
-                (async/go (async/>! done-chan (resolve-data {:attr attr :path new-path :data result}))))
-
-              (recur
-                resolved-data
-                (dec parsed-query-count)))))))))
-
-
-(defn resolve-collection-data [attr parent-data]
-  (let [result-chan   (async/chan)
-        resolve-count (count (:result parent-data))
-        result-data   (vec (repeat resolve-count {}))]
-
-    (doseq [[idx item] (map-indexed (:result parent-data))]
-      (async/go (async/>! result-chan (resolve-data {:attr attr :path [idx attr] :data item}))))
-
-    (async/go-loop []
-      (let [{:keys [path result]} (async/<! result-chan)
-            new-count (dec resolve-count)]
-
-        (assoc-in result-data path result)
-
-        (if (= new-count 0)
-          (assoc parent-data :data result-data)
-          (recur))))))
-
-
-
-(defn execute-query* [parsed-query parsed-query-count root-map]
-  (let [{:keys [root-path root-args]} root-map
-        root-attrs (get parsed-query root-path)
-        root-data  (resolve-root root-path root-args)
-        done-chan  (async/chan parsed-query-count)]
-
-    (doseq [attr root-attrs]
-      (async/go (async/>! done-chan (resolve-data {:attr attr :path root-path :data root-data}))))
-
-    (loop [resolved-data      {}
-           parsed-query-count parsed-query-count]
-
-      (cond
-        (= parsed-query-count 0)
-        resolved-data
-
-        :else
-        (let [{:keys [attr path result] :as done-result} (async/<!! done-chan)
-              new-path        (conj path attr)
+        (let [{:keys [attr path result done-coll?] :as done-result} (async/<!! done-chan)
+              new-path        (vec (remove nil? (conj path attr)))
               remaining-attrs (get parsed-query new-path :trek/not-found)]
 
           (cond
@@ -337,30 +334,45 @@
               (assoc-in resolved-data new-path result)
               (dec parsed-query-count))
 
+            (= done-coll? true)
+            (recur
+              (update-in resolved-data new-path #(mapv merge result %))
+              (dec parsed-query-count))
+
             (coll? result)
-            (do
+            (let [stub-result (vec (repeat (count result) {}))]
               (doseq [attr remaining-attrs]
-                (async/go (async/>! done-chan (resolve-collection-data attr done-result))))
+                (let [result-map (assoc done-result :attr attr :path new-path)]
+                  (async/go (async/>! done-chan (resolve-collection-data result-map execution-map)))))
+
               (recur
-                resolved-data
+                (assoc-in resolved-data new-path stub-result)
                 parsed-query-count))
 
             :else
             (do
               (doseq [attr remaining-attrs]
-                (async/go (async/>! done-chan (resolve-data {:attr attr :path new-path :data result}))))
+                (async/go (async/>! done-chan (resolve-data {:attr attr :path new-path :data result} execution-map))))
 
               (recur
                 resolved-data
                 (dec parsed-query-count)))))))))
 
 
+;(map merge [{:a 1}] [{:b 2}])
+;(pp/pprint
+;  (execute-query* {[:entity/user]               [:user/first-name :user/last-name :user/friends :user/posts]
+;                   [:entity/user :user/friends] [:user/first-name :user/last-name]
+;                   [:entity/user :user/posts]   [:post/title :post/author :post/created-at]}
+;                  7
+;                  {:root-name :query/me :root-args nil}
+;                  execution-map))
 
 ;(.indexOf [:a :b :c] :c)
 ;(assoc-in {:a [{:a 1} {}]} [:a 0 :b] 2)
 ;(vec (repeat 5 {}))
 ;[:a :b :c]
-;(pp/pprint (execute-query parsed-query 11 {:root-path [:entity/user] :root-args nil}))
+;(pp/pprint (execute-query* parsed-query 8 {:root-name :query/me :root-args nil} execution-map))
 
 
 ;(doseq [attr attrs]

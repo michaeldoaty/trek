@@ -81,9 +81,9 @@
   For example, [:user :friends :applications] turns into [:user :applications]
   if :friends is a type of :user"
 
-  [path links-map]
+  [path link-map]
   (letfn [(get-entity [v k]
-            (let [entity (get links-map (conj v k))]
+            (let [entity (get link-map (conj v k))]
               [entity]))]
 
     (conj
