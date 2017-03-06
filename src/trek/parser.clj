@@ -76,21 +76,6 @@
           attrs)))))
 
 
-(defn normalize-dispatch
-  "Normalizes the path to return an entity type plus an attribute.
-  For example, [:user :friends :applications] turns into [:user :applications]
-  if :friends is a type of :user"
-
-  [path link-map]
-  (letfn [(get-entity [v k]
-            (let [entity (get link-map (conj v k))]
-              [entity]))]
-
-    (conj
-      (reduce get-entity [] (drop-last path))
-      (last path))))
-
-
 (defn link-map
   "Takes an entity and a map of links and creates links to entity and entity to entity mappings.
   For example, :user and {:friends :user} returns {:user :user, [:user :friends] :user}"

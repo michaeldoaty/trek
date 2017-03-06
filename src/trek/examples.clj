@@ -29,8 +29,8 @@
    :last-name  "Jordan"
    :friends    [{:first-name "Gary" :last-name "Payton"}
                 {:first-name "Scottie" :last-name "Pippen"}]
-   :posts      [{:title "ha ha" :created-at "yesterday" :author "george"}
-                {:title "blues" :created-at "today" :author "kim"}]})
+   :posts      [{:title "ha ha" :created-at "yesterday" :author {:first-name "george" :last-name "david"}}
+                {:title "blues" :created-at "today" :author {:first-name "kim" :last-name "carr"}}]})
 
 
 (declare create-user send-user-to-kafka)
@@ -155,7 +155,8 @@
 (def link-map {:entity/user  :entity/user
                :entity/post  :entity/post
                :user/posts   :entity/post
-               :user/friends :entity/user})
+               :user/friends :entity/user
+               :post/author  :entity/user})
 
 (def queries {:query/me {:trek/fn     me
                          :trek/state  [:state/db]
@@ -292,13 +293,17 @@
 
       (if (= result-count 0)
         (assoc data :result result-data
-                    :done-coll? true
-                    :attr nil)
+                    :done-coll? true)
 
         (let [{:keys [idx-path result]} (async/<!! result-chan)]
           (recur (dec result-count)
                  (assoc-in result-data idx-path result)))))))
 
+
+(defn add-stub-data [item k v]
+  (if (coll? item)
+    (mapv #(assoc item k v) item)
+    (assoc item k v)))
 
 ;(execute-query {:attr :user/first-name
 ;               :path [:entity/user]
@@ -330,24 +335,27 @@
           (cond
 
             (= remaining-attrs :trek/not-found)
-            (recur
-              (assoc-in resolved-data new-path result)
-              (dec parsed-query-count))
+            (if done-coll?
+              (recur
+                (update-in resolved-data path #(mapv merge result %))
+                (dec parsed-query-count))
 
-            (= done-coll? true)
-            (recur
-              (update-in resolved-data new-path #(mapv merge result %))
-              (dec parsed-query-count))
+              (recur
+                (assoc-in resolved-data new-path result)
+                (dec parsed-query-count)))
 
-            (coll? result)
-            (let [stub-result (vec (repeat (count result) {}))]
+            (sequential? result)
+            (let [stub-result   (vec (repeat (count result) {}))
+                  current-value (get-in resolved-data path)]
               (doseq [attr remaining-attrs]
                 (let [result-map (assoc done-result :attr attr :path new-path)]
                   (async/go (async/>! done-chan (resolve-collection-data result-map execution-map)))))
 
               (recur
-                (assoc-in resolved-data new-path stub-result)
-                parsed-query-count))
+                (if (sequential? current-value)
+                  (assoc-in resolved-data path (mapv #(assoc % attr stub-result) current-value))
+                  (assoc-in resolved-data new-path stub-result))
+                (dec parsed-query-count)))
 
             :else
             (do
@@ -359,14 +367,27 @@
                 (dec parsed-query-count)))))))))
 
 
+[:entity/user :user/posts :post/author :user/first-name]
+
+(defn update-coll [path attr result resolved-data]
+  (loop [path   path
+         result {}]
+    (if (= attr (first path))
+      nil
+      (recur
+        (rest path)
+        (get resolved-data (first path))))))
+
+
 ;(map merge [{:a 1}] [{:b 2}])
-;(pp/pprint
-;  (execute-query* {[:entity/user]               [:user/first-name :user/last-name :user/friends :user/posts]
-;                   [:entity/user :user/friends] [:user/first-name :user/last-name]
-;                   [:entity/user :user/posts]   [:post/title :post/author :post/created-at]}
-;                  7
-;                  {:root-name :query/me :root-args nil}
-;                  execution-map))
+(pp/pprint
+  (execute-query* {[:entity/user]                          [:user/first-name :user/last-name :user/friends :user/posts]
+                   [:entity/user :user/friends]            [:user/first-name :user/last-name]
+                   [:entity/user :user/posts]              [:post/title :post/author :post/created-at]
+                   [:entity/user :user/posts :post/author] [:user/first-name]}
+                  10
+                  {:root-name :query/me :root-args nil}
+                  execution-map))
 
 ;(.indexOf [:a :b :c] :c)
 ;(assoc-in {:a [{:a 1} {}]} [:a 0 :b] 2)
