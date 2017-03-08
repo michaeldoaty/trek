@@ -366,8 +366,63 @@
                 resolved-data
                 (dec parsed-query-count)))))))))
 
+(def resolved-path
+  [:entity/user :user/posts :post/author :user/first-name])
 
-[:entity/user :user/posts :post/author :user/first-name]
+(def result-data
+  {:entity/user {:user/posts [{:post/title  "title 1"
+                               :post/author [{:user/first-name :trek/error}]}
+                              {:post/title  "title 2"
+                               :post/author [{:user/first-name :trek/error}]}]}})
+
+(defn get-map-or-coll
+  [map-or-coll k]
+  (if (sequential? map-or-coll)
+    (mapv #(get % k) map-or-coll)
+    (get map-or-coll k)))
+
+
+update-in
+(defn update-item
+  ([m ks f & args]
+   (let [up (fn up [m ks f args]
+              (let [[k & ks] ks]
+                (if ks
+                  (if (sequential? m)
+                    (mapv #(assoc % k (up (get-map-or-coll % k) ks f args)) m)
+                    (assoc m k (up (get-map-or-coll m k) ks f args)))
+
+                  (if (sequential? m)
+                    (mapv #(assoc % k (f (get-map-or-coll % k) args)) m)
+                    (assoc m k (f (get-map-or-coll m k) args))))))]
+     (up m ks f args))))
+
+(defn update-map-or-coll
+  [map-or-coll result]
+  (if (sequential? map-or-coll)
+    (mapv merge map-or-coll result)
+    (merge map-or-coll result)))
+
+
+(assoc {:a 1} :b (apply identity (get-map-or-coll {:a 1} :a)))
+(assoc {:a 1} :b 2)
+(apply update-map-or-coll (get-map-or-coll {:a {:b 1}} :a) {:c 3})
+(update-map-or-coll {:c 3} {:b 2})
+
+(map #(assoc % :user/first-name (apply update-map-or-coll [{:user/first-name nil}] :user/first-name [{:user/first-name nil}])))
+
+(get-map-or-coll [{:user/first-name :trek/error}] :user/first-name)
+(update-item [{:user/first-name nil}] [:user/first-name] update-map-or-coll [{:user/first-name "mike"}])
+
+(update-item [{:user/first-name :trek/error}
+              {:user/first-name :trek/error}] [:user/first-name] identity [{:user/first-name "mike"}
+                                                                           {:user/first-name "doug"}])
+
+(update-item [{:user/first-name :trek/error}
+              {:user/first-name :trek/error}] [:user/first-name] update-map-or-coll {:user/first-name "jim"})
+
+(update-item result-data resolved-path update-map-or-coll [{:user/first-name "mike"}
+                                                           {:user/first-name "doug"}])
 
 (defn update-coll [path attr result resolved-data]
   (loop [path   path
@@ -380,14 +435,14 @@
 
 
 ;(map merge [{:a 1}] [{:b 2}])
-(pp/pprint
-  (execute-query* {[:entity/user]                          [:user/first-name :user/last-name :user/friends :user/posts]
-                   [:entity/user :user/friends]            [:user/first-name :user/last-name]
-                   [:entity/user :user/posts]              [:post/title :post/author :post/created-at]
-                   [:entity/user :user/posts :post/author] [:user/first-name]}
-                  10
-                  {:root-name :query/me :root-args nil}
-                  execution-map))
+;(pp/pprint
+;  (execute-query* {[:entity/user]                          [:user/first-name :user/last-name :user/friends :user/posts]
+;                   [:entity/user :user/friends]            [:user/first-name :user/last-name]
+;                   [:entity/user :user/posts]              [:post/title :post/author :post/created-at]
+;                   [:entity/user :user/posts :post/author] [:user/first-name]}
+;                  10
+;                  {:root-name :query/me :root-args nil}
+;                  execution-map))
 
 ;(.indexOf [:a :b :c] :c)
 ;(assoc-in {:a [{:a 1} {}]} [:a 0 :b] 2)
